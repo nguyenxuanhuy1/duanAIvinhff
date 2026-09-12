@@ -329,7 +329,15 @@ async def _send_video_with_retry(bot_: Bot, chat_id: int, mp4: Path,
 
 
 async def main() -> None:
-    await dp.start_polling(bot)
+    # start_polling sẽ raise nếu mạng/Telegram lỗi — bọc để bot tự khởi động
+    # lại polling thay vì chết hẳn (mạng VN hay flaky).
+    while True:
+        try:
+            await dp.start_polling(bot)
+            return
+        except Exception as e:  # noqa: BLE001
+            print(f"polling crashed: {e} — restarting in 5s...")
+            await asyncio.sleep(5)
 
 
 if __name__ == "__main__":

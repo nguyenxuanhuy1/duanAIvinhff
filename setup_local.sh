@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # setup_local.sh — chuẩn bị môi trường render video local (không Kaggle).
 #
-# Làm: tạo venv kaggle-pipeline/.venv, cài playwright+edge-tts+ffmpeg-python,
+# Làm: tạo venv .venv ở gốc repo, cài playwright+edge-tts+ffmpeg-python,
 #      cài chromium, kiểm tra ffmpeg.
 #
-# Chạy: bash kaggle-pipeline/setup_local.sh
+# Chạy: bash setup_local.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,5 +27,5 @@ else
   echo "    THIẾU ffmpeg — cài bằng: sudo apt install -y ffmpeg"
 fi
 
-echo "==> XONG. Bot sẽ render qua: $VENV/bin/python"
-echo "    (config LOCAL_VENV_PYTHON trỏ đúng đường dẫn này)"
+echo "==> XONG. Bot sẽ tự dùng: $VENV/bin/python"
+echo "    (config.py auto-detect .venv ở gốc repo — không cần cấu hình)"

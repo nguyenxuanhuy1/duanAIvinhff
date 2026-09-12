@@ -13,6 +13,7 @@ measured value overwrites the scene's "duration" field - audio is the
 single source of truth for timing.
 """
 
+import asyncio
 import subprocess
 from pathlib import Path
 
@@ -40,15 +41,28 @@ def get_audio_duration(path: Path) -> float:
 
 class TTSBackend:
     """Edge-tts facade. Instantiated once per run."""
-    def __init__(self, voice=None, rate: str = "+25%"):
+    def __init__(self, voice=None, rate: str = "+25%", max_retries: int = 3):
         self.voice = voice or EDGE_DEFAULT_VOICE
         self.rate = rate
+        self.max_retries = max_retries
 
     async def synthesize(self, text: str, out_path: Path) -> float:
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        communicate = edge_tts.Communicate(text, self.voice, rate=self.rate)
-        await communicate.save(str(out_path))
-        return get_audio_duration(out_path)
+        last_err: Exception | None = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                communicate = edge_tts.Communicate(text, self.voice, rate=self.rate)
+                await communicate.save(str(out_path))
+                return get_audio_duration(out_path)
+            except Exception as e:  # noqa: BLE001 - mạng edge-tts hay flaky, thử lại
+                last_err = e
+                print(f"[tts] attempt {attempt} failed: {e}")
+                if attempt < self.max_retries:
+                    await asyncio.sleep(2 * attempt)
+        raise RuntimeError(
+            f"edge-tts thất bại sau {self.max_retries} lần cho câu "
+            f"'{text[:50]}...': {last_err}"
+        )
 
 
 async def synthesize_all_scenes(scene_json: dict, run_id: str,

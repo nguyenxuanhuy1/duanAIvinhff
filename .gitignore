@@ -6,11 +6,11 @@ __pycache__/
 *.log
 
 # generated output (keep folder structure)
-kaggle-pipeline/generated/audio/*
-!kaggle-pipeline/generated/audio/.gitkeep
-kaggle-pipeline/generated/html/*
-!kaggle-pipeline/generated/html/.gitkeep
-kaggle-pipeline/generated/scripts/*
-!kaggle-pipeline/generated/scripts/.gitkeep
-kaggle-pipeline/generated/videos/*
-!kaggle-pipeline/generated/videos/.gitkeep
+generated/audio/*
+!generated/audio/.gitkeep
+generated/html/*
+!generated/html/.gitkeep
+generated/scripts/*
+!generated/scripts/.gitkeep
+generated/videos/*
+!generated/videos/.gitkeep
