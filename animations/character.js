@@ -22,12 +22,12 @@ const Character = {
 
   center() {
     this.show("main");
-    this.els.main.classList.remove("char--left", "char--right", "char--up");
+    this.els.main.classList.remove("char--left", "char--right");
   },
 
   pointLeft() {
     this.show("main");
-    this.els.main.classList.remove("char--right", "char--up");
+    this.els.main.classList.remove("char--right");
     this.els.main.classList.add("char--left");
   },
 
@@ -41,7 +41,7 @@ const Character = {
 
   pointRight() {
     this.show("main");
-    this.els.main.classList.remove("char--left", "char--up");
+    this.els.main.classList.remove("char--left");
     this.els.main.classList.add("char--right");
   },
 };

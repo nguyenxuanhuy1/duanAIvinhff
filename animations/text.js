@@ -14,9 +14,4 @@ const TextCtl = {
     void this.el.offsetWidth;
     this.el.classList.add("text--in");
   },
-
-  clear() {
-    this.el.textContent = "";
-    this.el.classList.remove("text--in");
-  },
 };

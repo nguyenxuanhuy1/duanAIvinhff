@@ -77,7 +77,9 @@ def render_html(scene_json: dict, assets: dict, run_id: str) -> Path:
     text_js = _read(ANIMATIONS_DIR / "text.js")
     animation_js = _read(TEMPLATES_DIR / "animation.js")
 
-    scene_json_str = json.dumps(scene_json, ensure_ascii=False)
+    # Nhúng vào <script>: phải escape "</" nếu không 1 câu thoại chứa
+    # "</script>" sẽ đóng sớm thẻ script và làm hỏng cả trang render.
+    scene_json_str = json.dumps(scene_json, ensure_ascii=False).replace("</", r"<\/")
 
     # Optional extra characters are only rendered when their asset is provided.
     confused_img = (

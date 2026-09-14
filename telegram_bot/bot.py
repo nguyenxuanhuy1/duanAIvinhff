@@ -10,7 +10,9 @@ JSON → bot validate, render bằng pipeline local (edge-tts, giọng mặc đ�
 gửi video mp4 cho user.
 """
 import asyncio
+import glob
 import json
+import shutil
 import uuid
 from pathlib import Path
 
@@ -38,6 +40,10 @@ MAX_LINES = 15
 
 # Chỉ chạy 1 job render cùng lúc — tránh _purge_old_data xóa nhầm job đang chạy.
 RENDER_LOCK = asyncio.Lock()
+
+# asyncio chỉ giữ weak-ref tới task; không neo lại thì GC có thể huỷ job
+# render giữa chừng (user chờ mãi không có video). Giữ strong-ref ở đây.
+_RENDER_TASKS: set = set()
 
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
@@ -128,16 +134,24 @@ async def on_scene_json(message: Message, state: FSMContext):
 
 # ============ bước 2: ảnh nhân vật A ============
 
-@router.message(Job.wait_photo_a, F.photo)
-async def on_photo_a(message: Message, state: FSMContext):
+async def _save_photo(message: Message, state: FSMContext, filename: str) -> tuple:
+    """Tải ảnh user gửi vào thư mục staging của job, trả về FSM data mới."""
     data = await state.get_data()
-    staging = Path(data.get("staging")) if data.get("staging") else None
-    if staging is None:
+    staging = data.get("staging")
+    if staging:
+        staging = Path(staging)
+    else:
         staging = JOBS_DIR / f"staging_{message.from_user.id}_{uuid.uuid4().hex[:6]}"
         staging.mkdir(parents=True, exist_ok=True)
         data["staging"] = str(staging)
-    path = staging / "a.jpg"
+    path = staging / filename
     await message.bot.download(message.photo[-1], destination=path)
+    return data, path
+
+
+@router.message(Job.wait_photo_a, F.photo)
+async def on_photo_a(message: Message, state: FSMContext):
+    data, path = await _save_photo(message, state, "a.jpg")
     data["photo_a"] = str(path)
     await state.set_data(data)
     await state.set_state(Job.wait_photo_b)
@@ -153,20 +167,14 @@ async def on_photo_a_wrong(message: Message):
 
 @router.message(Job.wait_photo_b, F.photo)
 async def on_photo_b(message: Message, state: FSMContext):
-    data = await state.get_data()
-    staging = Path(data.get("staging")) if data.get("staging") else None
-    if staging is None:
-        staging = JOBS_DIR / f"staging_{message.from_user.id}_{uuid.uuid4().hex[:6]}"
-        staging.mkdir(parents=True, exist_ok=True)
-        data["staging"] = str(staging)
-    path = staging / "b.jpg"
-    await message.bot.download(message.photo[-1], destination=path)
+    data, path = await _save_photo(message, state, "b.jpg")
     data["photo_b"] = str(path)
-    await state.set_data(data)
 
     await state.clear()
     await message.answer("✅ Đã đủ: JSON + 2 ảnh. Đang render video… (vài phút)")
-    asyncio.create_task(_render_and_send(message.bot, message.chat.id, data))
+    task = asyncio.create_task(_render_and_send(message.bot, message.chat.id, data))
+    _RENDER_TASKS.add(task)
+    task.add_done_callback(_RENDER_TASKS.discard)
 
 
 @router.message(Job.wait_photo_b)
@@ -185,7 +193,6 @@ def _purge_old_data(job_dir: Path, keep_dirs: tuple = ()) -> None:
       trừ các file .gitkeep.
     Chạy ở đầu mỗi job mới.
     """
-    import shutil
     keep = {Path(p) for p in keep_dirs if p}
     keep.add(job_dir)
     for child in JOBS_DIR.iterdir():
@@ -216,9 +223,7 @@ def _purge_old_data(job_dir: Path, keep_dirs: tuple = ()) -> None:
                 pass
 
 
-async def _cleanup(data: dict, *dirs) -> None:
-    import glob
-    import shutil
+def _cleanup(data: dict, *dirs) -> None:
     paths = list(dirs)
     staging = data.get("staging")
     if staging:
@@ -232,16 +237,19 @@ async def _cleanup(data: dict, *dirs) -> None:
     # Dọn artifact trung gian của pipeline cho riêng run này.
     # KHÔNG xóa video _final.mp4 ở đây — nó chỉ bị xóa SAU khi gửi thành công.
     run_id = data.get("run_id")
-    if run_id:
-        base = Path(__file__).resolve().parent.parent / "generated"
-        for pat in (f"audio/{run_id}/*", f"html/{run_id}.html",
-                    f"scripts/{run_id}.json", f"videos/{run_id}.mp4",
-                    f"videos/{run_id}.webm"):
-            for f in glob.glob(str(base / pat)):
-                try:
-                    Path(f).unlink()
-                except Exception:
-                    pass
+    if not run_id:
+        return
+    base = Path(__file__).resolve().parent.parent / "generated"
+    # Xoá cả thư mục audio/<run_id>: bản cũ chỉ xoá file bên trong, để lại
+    # thư mục rỗng tích tụ dần sau mỗi job.
+    shutil.rmtree(base / "audio" / run_id, ignore_errors=True)
+    for pat in (f"html/{run_id}.html", f"scripts/{run_id}.json",
+                f"videos/{run_id}.mp4", f"videos/{run_id}.webm"):
+        for f in glob.glob(str(base / pat)):
+            try:
+                Path(f).unlink()
+            except Exception:
+                pass
 
 
 async def _render_and_send(bot_: Bot, chat_id: int, data: dict) -> None:
@@ -263,7 +271,10 @@ async def _render_and_send_locked(bot_: Bot, chat_id: int, data: dict) -> None:
     (job_dir / "metadata.json").write_text(
         json.dumps(meta, ensure_ascii=False), encoding="utf-8"
     )
-    import shutil
+    # Gán run_id NGAY: bản cũ chỉ gán sau khi render xong, nên mỗi lần render
+    # lỗi là audio/html/scripts/webm của run đó nằm lại vĩnh viễn trên đĩa.
+    data["run_id"] = meta["run_id"]
+
     shutil.copy(data["photo_a"], job_dir / "image_a.jpg")
     shutil.copy(data["photo_b"], job_dir / "image_b.jpg")
 
@@ -274,8 +285,8 @@ async def _render_and_send_locked(bot_: Bot, chat_id: int, data: dict) -> None:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        stdout, _ = await proc.communicate()
-        print(f"[job:{job_id}] {stdout.decode(errors='replace')}")
+        await _drain_output(proc, f"[job:{job_id}]")
+        await proc.wait()
 
         result_path = job_dir / "result.json"
         if not result_path.exists():
@@ -290,22 +301,40 @@ async def _render_and_send_locked(bot_: Bot, chat_id: int, data: dict) -> None:
         if not mp4.exists():
             await bot_.send_message(chat_id, "❌ Không thấy file video sau khi render.")
             return
-        data["run_id"] = meta["run_id"]
     except Exception as e:
         await bot_.send_message(chat_id, f"⚠️ Lỗi khi chạy render: {e}")
         return
     finally:
         # Dọn job_dir/staging/trung gian; KHÔNG xóa _final.mp4 (đang chờ gửi)
-        await _cleanup(data, job_dir)
+        _cleanup(data, job_dir)
 
     # Gửi với retry — chỉ xóa video SAU khi gửi thành công.
-    sent = await _send_video_with_retry(bot_, chat_id, mp4)
-    if mp4 is not None and mp4.exists():
-        # Gửi xong (dù thành công hay bỏ cuộc sau retry) mới xóa video gốc
+    await _send_video_with_retry(bot_, chat_id, mp4)
+    # Gửi xong (dù thành công hay bỏ cuộc sau retry) mới xóa video gốc
+    try:
+        mp4.unlink()
+    except OSError:
+        pass
+
+
+async def _drain_output(proc, tag: str) -> None:
+    """In log worker theo từng dòng ngay khi nó phát ra.
+
+    Bản cũ dùng proc.communicate(): giữ TOÀN BỘ stdout của cả job render trong
+    RAM cho tới khi worker kết thúc. Đọc theo dòng thì bộ nhớ luôn là hằng số,
+    và log hiện ra ngay thay vì đợi render xong mới thấy.
+    """
+    stream = proc.stdout
+    if stream is None:
+        return
+    while True:
         try:
-            mp4.unlink()
-        except Exception:
-            pass
+            line = await stream.readline()
+        except (ValueError, asyncio.LimitOverrunError):
+            continue  # dòng dài bất thường: readline đã nuốt buffer rồi, bỏ qua
+        if not line:
+            break
+        print(tag, line.decode(errors="replace").rstrip(), flush=True)
 
 
 async def _send_video_with_retry(bot_: Bot, chat_id: int, mp4: Path,
@@ -331,13 +360,17 @@ async def _send_video_with_retry(bot_: Bot, chat_id: int, mp4: Path,
 async def main() -> None:
     # start_polling sẽ raise nếu mạng/Telegram lỗi — bọc để bot tự khởi động
     # lại polling thay vì chết hẳn (mạng VN hay flaky).
-    while True:
-        try:
-            await dp.start_polling(bot)
-            return
-        except Exception as e:  # noqa: BLE001
-            print(f"polling crashed: {e} — restarting in 5s...")
-            await asyncio.sleep(5)
+    try:
+        while True:
+            try:
+                await dp.start_polling(bot)
+                return
+            except Exception as e:  # noqa: BLE001
+                print(f"polling crashed: {e} — restarting in 5s...")
+                await asyncio.sleep(5)
+    finally:
+        # Không đóng thì aiohttp connector + socket của bot bị bỏ lại khi thoát.
+        await bot.session.close()
 
 
 if __name__ == "__main__":

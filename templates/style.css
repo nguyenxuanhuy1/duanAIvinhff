@@ -16,6 +16,11 @@ html, body {
   background: #111;
 }
 
+/* will-change: ep Chromium tach #background thanh layer rieng.
+   Anh nen la anh tinh nhung co filter blur(6px) phu kin 1080x1920. Khi
+   khong tach layer, moi thay doi nho trong stage (doi caption, fade anh
+   A/B, lat nhan vat) deu bat ve lai ca layer -> tinh lai blur toan man
+   hinh, lien tuc suot luc record. Tach ra thi blur chi raster 1 lan. */
 #background {
   position: absolute;
   inset: 0;
@@ -24,6 +29,7 @@ html, body {
   object-fit: cover;
   filter: blur(6px) brightness(0.8);
   transform: scale(1.05);
+  will-change: transform;
 }
 
 .compare-image {
@@ -34,6 +40,7 @@ html, body {
   opacity: 0;
   top: 6%;
   transition: opacity 0.5s ease, transform 0.5s ease;
+  will-change: opacity;   /* fade 0.5s moi scene: chay tren compositor */
 }
 
 .compare-image--a { left: 5%; }
@@ -49,6 +56,7 @@ html, body {
   width: auto;
   transform: translateX(-50%);
   transition: transform 0.3s ease;
+  will-change: transform; /* lat trai/phai moi scene: khong ve lai ca stage */
   z-index: 5;
   display: none;
 }

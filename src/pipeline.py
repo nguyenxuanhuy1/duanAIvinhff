@@ -56,44 +56,59 @@ from recorder import record_html
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Tham số encode video dùng chung (giữ nguyên như bản cũ: x264 / fast / crf 23).
+_VIDEO_ENCODE_ARGS = [
+    "-c:v", "libx264",
+    "-preset", "fast",
+    "-crf", "23",
+    "-pix_fmt", "yuv420p",
+]
+
+
+def _run_ffmpeg(args: list, what: str) -> None:
+    """Chạy ffmpeg im lặng; lỗi thì raise kèm stderr thật (bản cũ nuốt mất log).
+
+    -nostdin: không giữ stdin (bot gọi qua subprocess, tránh treo).
+    -loglevel error: bỏ hàng nghìn dòng progress -> không phình buffer RAM.
+    """
+    proc = subprocess.run(
+        ["ffmpeg", "-nostdin", "-loglevel", "error", "-y", *args],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg {what} lỗi (exit {proc.returncode}): {proc.stderr.strip()}")
+
 
 def load_scene_json(path: str) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def convert_to_mp4(webm_path: Path, run_id: str) -> Path:
+def convert_to_mp4(webm_path: Path) -> Path:
+    """webm (không tiếng) -> mp4 (không tiếng). Chỉ phase 1 dùng."""
     mp4_path = webm_path.with_suffix(".mp4")
-    subprocess.run(
-        [
-            "ffmpeg", "-y",
-            "-i", str(webm_path),
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "23",
-            "-pix_fmt", "yuv420p",
-            str(mp4_path),
-        ],
-        check=True,
-        capture_output=True,
-    )
+    _run_ffmpeg(["-i", str(webm_path), *_VIDEO_ENCODE_ARGS, str(mp4_path)], "convert_to_mp4")
     return mp4_path
 
 
-def mux_audio_video(silent_video_path: Path, narration_path: Path, run_id: str) -> Path:
-    """Combine the silent recorded video with the concatenated TTS narration track."""
-    final_path = silent_video_path.parent / f"{run_id}_final.mp4"
-    subprocess.run(
+def encode_with_audio(webm_path: Path, narration_path: Path, run_id: str) -> Path:
+    """webm + narration -> final.mp4 trong MỘT lượt ffmpeg.
+
+    Bản cũ chạy 2 lượt: webm->mp4 (encode x264) rồi mp4+wav->final (copy video).
+    Lượt 2 phải đọc/ghi lại nguyên file 1080x1920 và để lại 1 mp4 trung gian
+    nằm trên đĩa. Gộp lại: bớt 1 vòng ghi+đọc toàn bộ video và bớt luôn file
+    tạm. Tham số encode y hệt nên chất lượng đầu ra không đổi.
+    """
+    final_path = webm_path.parent / f"{run_id}_final.mp4"
+    _run_ffmpeg(
         [
-            "ffmpeg", "-y",
-            "-i", str(silent_video_path),
+            "-i", str(webm_path),
             "-i", str(narration_path),
-            "-c:v", "copy",
+            *_VIDEO_ENCODE_ARGS,
             "-c:a", "aac",
             "-shortest",
             str(final_path),
         ],
-        check=True,
-        capture_output=True,
+        "encode_with_audio",
     )
     return final_path
 
@@ -108,7 +123,7 @@ async def generate_video_phase1(scene_json_path: str, assets: dict, run_id: str)
     webm_path = await record_html(html_path, run_id)
     print(f"[pipeline] Video recorded: {webm_path}")
 
-    mp4_path = convert_to_mp4(webm_path, run_id)
+    mp4_path = convert_to_mp4(webm_path)
     print(f"[pipeline] Final MP4 (no audio): {mp4_path}")
 
     return mp4_path
@@ -131,9 +146,7 @@ async def _tts_and_mux(scene_json: dict, assets: dict, run_id: str, voice: str) 
     webm_path = await record_html(html_path, run_id)
     print(f"[pipeline] Video (silent) recorded: {webm_path}")
 
-    silent_mp4_path = convert_to_mp4(webm_path, run_id)
-
-    final_path = mux_audio_video(silent_mp4_path, narration_path, run_id)
+    final_path = encode_with_audio(webm_path, narration_path, run_id)
     print(f"[pipeline] Final MP4 (with audio): {final_path}")
 
     return final_path

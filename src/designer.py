@@ -9,12 +9,8 @@ Maps the script lines (10-15) to a Scene JSON. Each line is either:
     A/B comparison lines, whichever the external AI chose. No cart character.
 """
 
-from pathlib import Path
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-
 # Legacy index-based template (used only when lines are plain strings).
-def _visual_for(index: int, total: int) -> dict:
+def _visual_for(index: int) -> dict:
     if index == 0:
         return {"image": "A",    "character": "pointLeftUp", "animation": "showA"}
     if index == 1:
@@ -26,7 +22,7 @@ def _visual_for(index: int, total: int) -> dict:
     return {"image": "B",    "character": "pointRight",  "animation": "showB"}
 
 
-def _visual_for_char(char: str, first_a: bool, first_b: bool) -> dict:
+def _visual_for_char(char: str, first_a: bool) -> dict:
     if char == "both":
         return {"image": "both", "character": "confused", "animation": "compare"}
     if char == "A":
@@ -56,15 +52,14 @@ def design_scenes(script_lines: list) -> dict:
         )
 
     scenes = []
-    total = len(script_lines)
     all_strings = all(isinstance(ln, str) for ln in script_lines)
 
     if all_strings:
         for index, line in enumerate(script_lines):
-            visuals = _visual_for(index, total)
+            visuals = _visual_for(index)
             scenes.append({**visuals, "text": line, "duration": DEFAULT_DURATION})
     else:
-        first_a = first_b = True
+        first_a = True
         for item in script_lines:
             if not isinstance(item, dict):
                 raise ValueError(
@@ -77,11 +72,9 @@ def design_scenes(script_lines: list) -> dict:
                 raise ValueError(f"Invalid char {char!r} (expected A/B/both)")
             if not isinstance(text, str) or not text.strip():
                 raise ValueError("Missing non-empty 'text' in script line")
-            visuals = _visual_for_char(char, first_a, first_b)
+            visuals = _visual_for_char(char, first_a)
             if char == "A":
                 first_a = False
-            elif char == "B":
-                first_b = False
             scenes.append({**visuals, "text": text.strip(), "duration": DEFAULT_DURATION})
 
     return {"duration": DEFAULT_DURATION * len(scenes), "scenes": scenes}

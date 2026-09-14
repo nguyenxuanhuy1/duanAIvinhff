@@ -18,9 +18,8 @@ def _required(name: str) -> str:
 
 BOT_TOKEN = _required("BOT_TOKEN")
 
-BASE_DIR = Path(__file__).resolve().parent.parent
 JOBS_DIR = BASE_DIR / "telegram_bot" / "jobs"
-ASSETS_DIR = BASE_DIR / "telegram_bot" / "assets"
+
 
 def _find_venv_python() -> Path:
     """Tự tìm python của virtualenv (tương đối theo repo — dùng chung mọi máy).
@@ -46,10 +45,6 @@ def _find_venv_python() -> Path:
 # Bot render qua subprocess bằng venv python này để không cần cài
 # playwright/edge-tts vào python hệ thống của bot.
 LOCAL_VENV_PYTHON = str(_find_venv_python())
-
-# Asset cố định dùng lại cho mọi video (phục vụ trực tiếp từ máy local).
-# image_a/image_b được bot tải từ 2 ảnh nhân vật user gửi theo từng job.
-FIXED_ASSETS = ["background.jpg", "character.png", "character_confused.png"]
 
 # Giọng TTS mặc định (edge-tts, miễn phí, chạy local): nam miền Bắc.
 DEFAULT_VOICE = os.getenv("DEFAULT_VOICE", "vi-VN-NamMinhNeural")

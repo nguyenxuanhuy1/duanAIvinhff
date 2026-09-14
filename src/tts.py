@@ -25,6 +25,12 @@ GENERATED_AUDIO_DIR = BASE_DIR / "generated" / "audio"
 EDGE_DEFAULT_VOICE = "vi-VN-NamMinhNeural"
 
 
+# Số câu TTS chạy song song. edge-tts là I/O mạng thuần: chạy tuần tự thì
+# 10-15 câu = 10-15 lần chờ round-trip nối đuôi nhau. Giới hạn 4 để không bị
+# Microsoft chặn rate, vẫn nhanh hơn ~3-4 lần. Kết quả từng câu không đổi.
+TTS_CONCURRENCY = 4
+
+
 def get_audio_duration(path: Path) -> float:
     """Exact duration in seconds via ffprobe (never estimated)."""
     result = subprocess.run(
@@ -75,16 +81,25 @@ async def synthesize_all_scenes(scene_json: dict, run_id: str,
     voice: edge-tts voice name (mặc định vi-VN-NamMinhNeural).
     """
     backend = TTSBackend(voice=voice)
+    scenes = scene_json["scenes"]
 
     run_audio_dir = GENERATED_AUDIO_DIR / run_id
+    run_audio_dir.mkdir(parents=True, exist_ok=True)
     audio_paths = [
-        run_audio_dir / f"scene_{i:02d}.mp3"
-        for i in range(len(scene_json["scenes"]))
+        run_audio_dir / f"scene_{i:02d}.mp3" for i in range(len(scenes))
     ]
 
-    for i, scene in enumerate(scene_json["scenes"]):
-        duration = await backend.synthesize(scene["text"], audio_paths[i])
+    sem = asyncio.Semaphore(TTS_CONCURRENCY)
+
+    async def _one(scene: dict, out_path: Path) -> None:
+        async with sem:
+            duration = await backend.synthesize(scene["text"], out_path)
+        # Mỗi task ghi vào dict scene riêng của nó -> không tranh chấp.
         scene["duration"] = round(duration, 3)
+
+    await asyncio.gather(
+        *(_one(scene, path) for scene, path in zip(scenes, audio_paths))
+    )
 
     return {"scene_json": scene_json, "audio_paths": audio_paths}
 
@@ -98,15 +113,17 @@ def concat_audio(audio_paths: list, run_id: str) -> Path:
         encoding="utf-8",
     )
     final_audio_path = run_audio_dir / "narration.wav"
-    subprocess.run(
+    proc = subprocess.run(
         [
-            "ffmpeg", "-y",
+            "ffmpeg", "-nostdin", "-loglevel", "error", "-y",
             "-f", "concat", "-safe", "0",
             "-i", str(concat_list_path),
             "-ar", "44100",
             "-ac", "1",
             str(final_audio_path),
         ],
-        check=True, capture_output=True,
+        capture_output=True, text=True,
     )
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg concat_audio lỗi: {proc.stderr.strip()}")
     return final_audio_path
