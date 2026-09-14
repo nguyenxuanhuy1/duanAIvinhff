@@ -14,25 +14,39 @@ Viết ĐÚNG 10 đến 15 câu thoại tiếng Việt cho video. Mỗi câu đ�
 char chỉ nhân vật mà câu đó nói về, để video xoay đúng người:
 - char = "A": câu chỉ nói về A.
 - char = "B": câu chỉ nói về B.
-- char = "both": câu dùng chung cho cả hai (giới thiệu/tổng kết/hỏi chung).
+- char = "both": câu dùng chung cho cả hai (giới thiệu/hỏi chung).
 
 CẤU TRÚC KHUNG (câu 1-2-3 bắt buộc giống mẫu):
 1. Câu 1, giới thiệu A, char = "A": bắt đầu "Đây là (tên A), ..."
 2. Câu 2, giới thiệu B, char = "B": bắt đầu "Đây là (tên B), ..."
-3. Câu 3, câu hỏi mấu chốt, char = "both":
+3. Câu 3, câu hỏi mấu chốt, char = "both": mặc định dùng
    "Vậy giữa hai kẻ này, ai mới thật sự phải trả giá nặng hơn."
+   Bạn ĐƯỢC PHÉP tùy chỉnh/viết lại câu hỏi sao cho ĐÚNG VÀ SÁT bối cảnh
+   của 2 vụ án (vd: đúng kiểu tội, đúng mức độ, đúng nghi vấn của vụ đó),
+   miễn là vẫn giữ ý "ai phải trả giá nặng hơn" và đủ mạnh để gây tò mò.
+
+BẮT BUỘC đi sâu vào CHI TIẾT VÀ CÁCH THỨC GÂY ÁN để video hấp dẫn và gây
+ấn tượng. Với MỖI nhân vật, phải đưa vào các thông tin (nếu tìm được):
+- Nghề nghiệp / thân phận / ngoại hình nổi bật (nếu có).
+- QUY TRÌNH THỰC HIỆN VỤ ÁN: cách hắn chọn nạn nhân, chuẩn bị, tiếp cận,
+  thực hiện, che giấu hành vi, và vì sao bị lộ.
+- Phương thức / thủ đoạn đặc trưng (modus operandi) gây ấn tượng.
+- Dấu vết để lại, lúc bị bắt như thế nào.
+- Mức án / số năm tù (nếu có).
+Miêu tả có nhịp điệu, kịch tính, nhưng vẫn khách quan như đọc hồ sơ vụ án.
 
 TỪ CÂU 4 TRỞ ĐI, chọn 1 trong 2 kiểu cho phù hợp nội dung:
 
 KIỂU 1 — KHÔNG có yếu tố để so sánh cặp câu chữ:
 Đọc TRỌN VẸN một loạt đặc điểm về A trước (nhiều câu liên tiếp, char = "A"):
-tội danh, mức án, tình tiết nổi bật, cách thức gây án, hậu quả của từng vụ.
+tội danh, phương thức gây án, quy trình thực hiện vụ án, tình tiết nổi bật,
+dấu vết, lúc bị bắt, mức án, hậu quả của từng vụ.
 Xong mới chuyển sang B (nhiều câu liên tiếp, char = "B") cùng loại thông tin.
 KHÔNG cần xen kẽ A rồi B. Mỗi câu vẫn chỉ nói ĐÚNG MỘT người.
 
 KIỂU 2 — CÓ điểm cần đối chiếu trực tiếp:
 Chỉ khi có một tiêu chí so sánh thật sự (cùng loại tội, cùng mức độ, cùng
-hình thức phạm tội…) thì mới viết A rồi ngay B trong cùng một cặp:
+phương thức phạm tội…) thì mới viết A rồi ngay B trong cùng một cặp:
 "A, ... (char A)" rồi "B, ... (char B)", để câu chữ đối chiếu rõ ràng.
 
 QUY TẮC BẮT BUỘC:
