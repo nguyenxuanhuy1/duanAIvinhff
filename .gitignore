@@ -14,3 +14,5 @@ generated/scripts/*
 !generated/scripts/.gitkeep
 generated/videos/*
 !generated/videos/.gitkeep
+generated/frames/*
+!generated/frames/.gitkeep

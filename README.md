@@ -5,7 +5,8 @@ Personal tool to auto-generate A-vs-B comparison videos, chạy hoàn toàn loca
 
 Luồng: kịch bản 10-15 câu (do AI ngoài viết, JSON) + 2 ảnh nhân vật A/B
 -> designer map visual -> edge-tts (giọng NamMinh mặc định, tốc độ 1.25x)
--> HTML/CSS/JS -> Playwright/Chromium record -> FFmpeg -> final.mp4
+-> HTML/CSS/JS -> Playwright/Chromium chụp 1 ảnh mỗi scene -> FFmpeg
+(crossfade + ghép tiếng) -> final.mp4
 
 ## Cấu trúc
 
@@ -14,7 +15,7 @@ tol/                     # gốc repo (mọi máy clone về là chạy được
 ├── src/                 # pipeline render video (designer/tts/renderer/...)
 ├── templates/           # HTML/CSS/JS template
 ├── animations/          # js animation hiệu ứng nhân vật
-├── generated/           # output tạm (audio/html/scripts/videos) — tự xóa
+├── generated/           # output tạm (audio/frames/html/scripts/videos) — tự xóa
 ├── telegram_bot/        # bot Telegram (bot.py, config.py, assets/, prompts/)
 ├── requirements.txt
 ├── setup_local.sh       # tạo .venv + cài deps + playwright chromium
@@ -42,4 +43,23 @@ setsid nohup python3 -m telegram_bot.bot >> bot.log 2>&1 < /dev/null &
 
 ```bash
 .venv/bin/python src/pipeline.py
+```
+## Chế độ dựng video (`RECORD_MODE`)
+
+Mặc định `stills`: mỗi scene chỉ chụp **một ảnh tĩnh**, rồi FFmpeg dựng thẳng
+ra H.264 kèm crossfade 0.5s giữa các scene. Làm được vì mọi transition trong
+`templates/style.css` đều hữu hạn (<= 0.5s, `forwards`) — sau đó khung hình
+đứng yên, nên quay realtime là encode lặp lại hàng nghìn khung giống hệt nhau.
+
+So với bản cũ, cách này bỏ hẳn **hai** lượt encode toàn bộ video: VP8 của
+Chromium lúc quay, và lượt transcode webm -> H.264 sau đó.
+
+Ở chế độ này TTS (chờ mạng) và chụp ảnh (CPU) chạy **song song**, vì
+`capture_scenes` không cần tới duration — hai việc không giành tài nguyên
+của nhau nên trên máy ít core phần thời gian này gần như được cho không.
+
+Muốn quay lại đúng cách cũ (Chromium record realtime):
+
+```bash
+RECORD_MODE=browser python -m telegram_bot.bot
 ```

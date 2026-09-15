@@ -41,6 +41,12 @@ MAX_LINES = 15
 # Chỉ chạy 1 job render cùng lúc — tránh _purge_old_data xóa nhầm job đang chạy.
 RENDER_LOCK = asyncio.Lock()
 
+# Trần thời gian cho một lượt render. Không có nó, một worker treo (Chromium
+# kẹt, đĩa đầy, ffmpeg đứng) sẽ giữ RENDER_LOCK vĩnh viễn: bot vẫn nhận tin
+# nhắn, vẫn báo "đang render…", nhưng không job nào chạy nữa cho tới khi
+# restart tay.
+RENDER_TIMEOUT_SECONDS = 15 * 60
+
 # asyncio chỉ giữ weak-ref tới task; không neo lại thì GC có thể huỷ job
 # render giữa chừng (user chờ mãi không có video). Giữ strong-ref ở đây.
 _RENDER_TASKS: set = set()
@@ -189,7 +195,7 @@ def _purge_old_data(job_dir: Path, keep_dirs: tuple = ()) -> None:
 
     - Mọi job_id*/staging* còn sót trong JOBS_DIR (trừ job_dir đang dùng
       và các thư mục trong keep_dirs, vd staging ảnh A/B của job hiện tại).
-    - Mọi artifact trong kaggle-pipeline/generated (audio/html/scripts/videos)
+    - Mọi artifact trong generated/ (audio/frames/html/scripts/videos)
       trừ các file .gitkeep.
     Chạy ở đầu mỗi job mới.
     """
@@ -207,7 +213,7 @@ def _purge_old_data(job_dir: Path, keep_dirs: tuple = ()) -> None:
             pass
 
     gen_root = Path(__file__).resolve().parent.parent / "generated"
-    for sub in ("audio", "html", "scripts", "videos"):
+    for sub in ("audio", "frames", "html", "scripts", "videos"):
         d = gen_root / sub
         if not d.exists():
             continue
@@ -243,6 +249,7 @@ def _cleanup(data: dict, *dirs) -> None:
     # Xoá cả thư mục audio/<run_id>: bản cũ chỉ xoá file bên trong, để lại
     # thư mục rỗng tích tụ dần sau mỗi job.
     shutil.rmtree(base / "audio" / run_id, ignore_errors=True)
+    shutil.rmtree(base / "frames" / run_id, ignore_errors=True)
     for pat in (f"html/{run_id}.html", f"scripts/{run_id}.json",
                 f"videos/{run_id}.mp4", f"videos/{run_id}.webm"):
         for f in glob.glob(str(base / pat)):
@@ -285,8 +292,21 @@ async def _render_and_send_locked(bot_: Bot, chat_id: int, data: dict) -> None:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        await _drain_output(proc, f"[job:{job_id}]")
-        await proc.wait()
+        try:
+            await asyncio.wait_for(
+                _drain_output(proc, f"[job:{job_id}]"),
+                timeout=RENDER_TIMEOUT_SECONDS,
+            )
+            await asyncio.wait_for(proc.wait(), timeout=30)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            await bot_.send_message(
+                chat_id,
+                f"❌ Render chạy quá {RENDER_TIMEOUT_SECONDS // 60} phút nên đã bị "
+                "dừng. Gõ /start để thử lại.",
+            )
+            return
 
         result_path = job_dir / "result.json"
         if not result_path.exists():

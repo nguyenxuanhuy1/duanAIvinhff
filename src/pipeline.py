@@ -47,14 +47,25 @@ supported directly in Jupyter/Kaggle cells):
     )
 """
 
+import asyncio
 import json
+import os
 import subprocess
 from pathlib import Path
 
 from renderer import render_html
-from recorder import record_html
+from recorder import record_html, capture_scenes
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+GENERATED_VIDEO_DIR = BASE_DIR / "generated" / "videos"
+
+# "stills" (mặc định): chụp 1 ảnh/scene rồi để ffmpeg dựng video — nhanh hơn
+# nhiều lần. "browser": quay màn hình realtime như bản cũ (đặt env
+# RECORD_MODE=browser để quay lại cách cũ nếu thấy hình không ưng).
+RECORD_MODE = os.getenv("RECORD_MODE", "stills").strip().lower()
+
+FPS = 30
+XFADE_DURATION = 0.5  # khớp với transition 0.5s trong templates/style.css
 
 # Tham số encode video dùng chung (giữ nguyên như bản cũ: x264 / fast / crf 23).
 _VIDEO_ENCODE_ARGS = [
@@ -113,6 +124,78 @@ def encode_with_audio(webm_path: Path, narration_path: Path, run_id: str) -> Pat
     return final_path
 
 
+def encode_from_stills(
+    frame_paths: list, scene_json: dict, narration_path: Path, run_id: str
+) -> Path:
+    """Dựng final.mp4 từ các ảnh tĩnh mỗi scene + narration, trong MỘT lượt ffmpeg.
+
+    Thay cho đường "quay webm rồi transcode": ở đây không có lượt encode VP8
+    nào, và x264 gặp toàn khung hình đứng yên nên chạy rất nhanh.
+
+    Nhịp thời gian (audio vẫn là nguồn chuẩn duy nhất, y như trước):
+      - scene i được kéo dài d_i + XFADE để có phần chồng lấn cho crossfade;
+      - crossfade sang scene i bắt đầu đúng tại T_i = d_0 + ... + d_(i-1),
+        tức đúng thời điểm câu thoại i bắt đầu vang lên — giống hệt lúc CSS
+        transition khởi động ở đầu mỗi scene;
+      - tổng video = sum(d) + XFADE, dài hơn narration đúng XFADE giây, nên
+        -shortest cắt gọn phần đuôi thừa.
+    """
+    scenes = scene_json["scenes"]
+    if len(frame_paths) != len(scenes):
+        raise ValueError(
+            f"encode_from_stills: có {len(frame_paths)} ảnh nhưng {len(scenes)} scene"
+        )
+    durations = [float(scene.get("duration") or 4) for scene in scenes]
+
+    GENERATED_VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+    final_path = GENERATED_VIDEO_DIR / f"{run_id}_final.mp4"
+
+    inputs = []
+    for frame_path, duration in zip(frame_paths, durations):
+        inputs += [
+            "-loop", "1",
+            "-framerate", str(FPS),
+            "-t", f"{duration + XFADE_DURATION:.3f}",
+            "-i", str(frame_path),
+        ]
+    inputs += ["-i", str(narration_path)]
+    audio_index = len(frame_paths)
+
+    # Chuẩn hoá từng ảnh về cùng fps/pixel format/timebase — xfade từ chối nối
+    # hai luồng lệch nhau dù chỉ ở timebase.
+    filters = [
+        f"[{i}:v]fps={FPS},format=yuv420p,setsar=1,settb=AVTB[s{i}]"
+        for i in range(len(frame_paths))
+    ]
+    last_label = "s0"
+    offset = 0.0
+    for i in range(1, len(frame_paths)):
+        offset += durations[i - 1]
+        filters.append(
+            f"[{last_label}][s{i}]xfade=transition=fade:"
+            f"duration={XFADE_DURATION}:offset={offset:.3f}[x{i}]"
+        )
+        last_label = f"x{i}"
+    filters.append(f"[{last_label}]format=yuv420p[vout]")
+
+    _run_ffmpeg(
+        [
+            *inputs,
+            "-filter_complex", ";".join(filters),
+            "-map", "[vout]",
+            "-map", f"{audio_index}:a",
+            *_VIDEO_ENCODE_ARGS,
+            "-r", str(FPS),
+            "-c:a", "aac",
+            "-shortest",
+            "-movflags", "+faststart",  # Telegram phát được ngay, không cần tải hết
+            str(final_path),
+        ],
+        "encode_from_stills",
+    )
+    return final_path
+
+
 async def generate_video_phase1(scene_json_path: str, assets: dict, run_id: str) -> Path:
     """No TTS - scene durations come straight from the hand-typed JSON."""
     scene_json = load_scene_json(scene_json_path)
@@ -133,20 +216,63 @@ async def _tts_and_mux(scene_json: dict, assets: dict, run_id: str, voice: str) 
     """Shared tail of phases 2/3: TTS → real durations → render → record → mux."""
     from tts import synthesize_all_scenes, concat_audio
 
-    tts_result = await synthesize_all_scenes(scene_json, run_id, voice=voice)
+    if RECORD_MODE == "browser":
+        # Đường cũ: trang tự phát scene bằng setTimeout theo "duration" nhúng
+        # trong HTML, nên phải có duration THẬT trước khi render HTML.
+        tts_result = await synthesize_all_scenes(scene_json, run_id, voice=voice)
+        scene_json = tts_result["scene_json"]  # durations are now real, measured
+        print(f"[pipeline] TTS (edge) generated for {len(tts_result['audio_paths'])} scenes")
+
+        narration_path = concat_audio(tts_result["audio_paths"], run_id)
+        print(f"[pipeline] Narration track: {narration_path}")
+
+        html_path = render_html(scene_json, assets, run_id)
+        print(f"[pipeline] HTML rendered: {html_path}")
+
+        webm_path = await record_html(html_path, run_id)
+        print(f"[pipeline] Video (silent) recorded: {webm_path}")
+
+        final_path = encode_with_audio(webm_path, narration_path, run_id)
+        print(f"[pipeline] Final MP4 (with audio): {final_path}")
+        return final_path
+
+    # Đường "stills": capture_scenes tự bấm từng scene rồi chụp, nó KHÔNG đọc
+    # tới "duration" — chỉ cần biết có bao nhiêu scene và visual của từng scene.
+    # Nhờ vậy chụp ảnh chạy song song được với TTS, và hai việc này không giành
+    # tài nguyên của nhau: TTS là chờ mạng (gần như 0% CPU), chụp ảnh là CPU.
+    # Trên máy ít core đây là phần thời gian cho không.
+    #
+    # Hệ quả: generated/html/<run_id>.html giữ duration placeholder (4s) thay vì
+    # duration đo thật. Chỉ ảnh hưởng khi mở file HTML đó ra xem tay để debug —
+    # nhịp của video thành phẩm do encode_from_stills quyết định, lấy từ
+    # duration đo thật bên dưới.
+    html_path = render_html(scene_json, assets, run_id)
+    print(f"[pipeline] HTML rendered: {html_path}")
+
+    capture_task = asyncio.create_task(capture_scenes(html_path, scene_json, run_id))
+    try:
+        tts_result = await synthesize_all_scenes(scene_json, run_id, voice=voice)
+    except BaseException:
+        # TTS hỏng thì đừng bỏ Chromium chạy mồ côi. cancel() mới chỉ là YÊU CẦU
+        # huỷ — phải await tiếp thì task mới chạy được khối `finally:
+        # await browser.close()` của capture_scenes. Bỏ qua bước await này là
+        # để lại một tiến trình Chromium treo mỗi lần TTS lỗi.
+        capture_task.cancel()
+        try:
+            await capture_task
+        except BaseException:
+            pass
+        raise
     scene_json = tts_result["scene_json"]  # durations are now real, measured values
     print(f"[pipeline] TTS (edge) generated for {len(tts_result['audio_paths'])} scenes")
+
+    frame_paths = await capture_task
+    print(f"[pipeline] Captured {len(frame_paths)} scene stills")
 
     narration_path = concat_audio(tts_result["audio_paths"], run_id)
     print(f"[pipeline] Narration track: {narration_path}")
 
-    html_path = render_html(scene_json, assets, run_id)
-    print(f"[pipeline] HTML rendered: {html_path}")
-
-    webm_path = await record_html(html_path, run_id)
-    print(f"[pipeline] Video (silent) recorded: {webm_path}")
-
-    final_path = encode_with_audio(webm_path, narration_path, run_id)
+    final_path = encode_from_stills(frame_paths, scene_json, narration_path, run_id)
     print(f"[pipeline] Final MP4 (with audio): {final_path}")
 
     return final_path
@@ -214,8 +340,6 @@ async def generate_video_phase3(
 
 
 if __name__ == "__main__":
-    import asyncio
-
     assets = {
         "background": str(BASE_DIR / "assets" / "background.jpg"),
         "character": str(BASE_DIR / "assets" / "character.png"),
